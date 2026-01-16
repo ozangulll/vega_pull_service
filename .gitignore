@@ -1,0 +1,42 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# VS Code
+.vscode/
+
+# Spring Boot
+*.pid
+
+# Env files
+.env
+application-local.yml
+application-dev.yml
+
+# Build output
+*.class
+
+# Test output
+surefire-reports/
+
+# Temporary files
+tmp/
