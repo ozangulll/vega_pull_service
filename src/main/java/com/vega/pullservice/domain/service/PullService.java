@@ -37,10 +37,37 @@ public class PullService {
             throw new RuntimeException("Unable to determine user ID");
         }
         
-        // Check if repository exists
+        // Repository ID is now in format: username/repository-name
+        // Extract username and repository name from repositoryId
+        String username = null;
+        String repositoryName = request.getRepositoryId();
+        if (request.getRepositoryId().contains("/")) {
+            String[] parts = request.getRepositoryId().split("/", 2);
+            if (parts.length == 2) {
+                username = parts[0];
+                repositoryName = parts[1];
+            }
+        }
+        
+        // If username not in repositoryId, get from token
+        if (username == null || username.isEmpty()) {
+            username = userValidationService.getUsernameFromToken(token);
+            if (username == null || username.isEmpty()) {
+                // If repositoryId doesn't contain "/", assume it's just repository name and use current user
+                username = userValidationService.getUsernameFromToken(token);
+                if (username == null || username.isEmpty()) {
+                    throw new RuntimeException("Unable to determine username");
+                }
+            }
+        }
+        
+        // Repository ID in format: username/repository-name
+        String repositoryId = username + "/" + repositoryName;
+        
+        // Check if repository exists in HDFS
         try {
-            if (!hdfsPullService.repositoryExists(userId, request.getRepositoryId())) {
-                throw new RuntimeException("Repository not found: " + request.getRepositoryId());
+            if (!hdfsPullService.repositoryExists(username, repositoryName)) {
+                throw new RuntimeException("Repository not found: " + repositoryId);
             }
         } catch (Exception e) {
             throw new RuntimeException("Error checking repository existence: " + e.getMessage());
@@ -49,10 +76,11 @@ public class PullService {
         // Create pull operation record
         PullOperation pullOperation = PullOperation.builder()
                 .userId(userId)
-                .repositoryId(request.getRepositoryId())
-                .repositoryName("") // Will be updated after download
+                .repositoryId(repositoryId)
+                .repositoryName(repositoryName)
                 .hdfsPath("") // Will be updated after download
                 .status(PullOperation.Status.PENDING)
+                .createdAt(LocalDateTime.now()) // Set manually for builder
                 .build();
         
         pullOperation = pullOperationRepository.save(pullOperation);
@@ -62,8 +90,8 @@ public class PullService {
             pullOperation.setStatus(PullOperation.Status.IN_PROGRESS);
             pullOperationRepository.save(pullOperation);
             
-            // Download from HDFS
-            PullResponse pullResponse = hdfsPullService.downloadRepository(userId, request.getRepositoryId());
+            // Download from HDFS using username/repository-name format
+            PullResponse pullResponse = hdfsPullService.downloadRepository(username, repositoryName);
             
             // Update pull operation with results
             pullOperation.setRepositoryName(pullResponse.getRepositoryName());

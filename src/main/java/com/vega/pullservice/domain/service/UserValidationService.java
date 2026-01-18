@@ -46,19 +46,36 @@ public class UserValidationService {
             headers.set("Authorization", "Bearer " + token);
             HttpEntity<String> entity = new HttpEntity<>(headers);
             
-            String url = userServiceUrl + "/api/users/profile";
-            ResponseEntity<Map> response = restTemplate.exchange(
-                url, HttpMethod.GET, entity, Map.class
+            String url = userServiceUrl + "/api/auth/user-id";
+            ResponseEntity<Long> response = restTemplate.exchange(
+                url, HttpMethod.POST, entity, Long.class
             );
             
             if (response.getBody() != null) {
-                Object userId = response.getBody().get("id");
-                if (userId instanceof Number) {
-                    return ((Number) userId).longValue();
-                }
+                return response.getBody();
             }
         } catch (Exception e) {
             log.error("Failed to get user ID from token: {}", e.getMessage());
+        }
+        return null;
+    }
+    
+    public String getUsernameFromToken(String token) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", "Bearer " + token);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+            
+            String url = userServiceUrl + "/api/auth/username";
+            ResponseEntity<String> response = restTemplate.exchange(
+                url, HttpMethod.POST, entity, String.class
+            );
+            
+            if (response.getBody() != null && !response.getBody().isEmpty()) {
+                return response.getBody();
+            }
+        } catch (Exception e) {
+            log.error("Failed to get username from token: {}", e.getMessage());
         }
         return null;
     }

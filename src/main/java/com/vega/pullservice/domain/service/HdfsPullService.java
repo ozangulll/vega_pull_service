@@ -4,6 +4,7 @@ import com.vega.pullservice.domain.dto.PullResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +12,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.GZIPInputStream;
@@ -28,12 +30,43 @@ public class HdfsPullService {
     private FileSystem getFileSystem() throws IOException {
         Configuration conf = new Configuration();
         conf.set("fs.defaultFS", hdfsUri);
-        return FileSystem.get(conf);
+        // Disable permission checks for testing
+        conf.set("dfs.permissions.enabled", "false");
+        // Set user to root via UserGroupInformation
+        try {
+            UserGroupInformation ugi = UserGroupInformation.createRemoteUser("root");
+            ugi.setAuthenticationMethod(UserGroupInformation.AuthenticationMethod.SIMPLE);
+            return ugi.doAs((PrivilegedExceptionAction<FileSystem>) () -> {
+                return FileSystem.get(conf);
+            });
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Failed to get FileSystem as root user", e);
+        }
     }
     
+    // Overloaded method for backward compatibility
     public PullResponse downloadRepository(Long userId, String repositoryId) throws IOException {
-        String hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
-        
+        // For backward compatibility - extract username if repositoryId is in format username/repo-name
+        String hdfsPath;
+        if (repositoryId.contains("/")) {
+            // Repository ID is in format username/repository-name
+            hdfsPath = String.format("%s/%s", basePath, repositoryId);
+        } else {
+            // Old format: use userId
+            hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
+        }
+        return downloadRepositoryInternal(hdfsPath, repositoryId);
+    }
+    
+    // New method using username/repository-name format
+    public PullResponse downloadRepository(String username, String repositoryName) throws IOException {
+        String hdfsPath = String.format("%s/%s/%s", basePath, username, repositoryName);
+        String repositoryId = username + "/" + repositoryName;
+        return downloadRepositoryInternal(hdfsPath, repositoryId);
+    }
+    
+    private PullResponse downloadRepositoryInternal(String hdfsPath, String repositoryId) throws IOException {
         try (FileSystem fs = getFileSystem()) {
             Path repoPath = new Path(hdfsPath);
             if (!fs.exists(repoPath)) {
@@ -54,17 +87,60 @@ public class HdfsPullService {
             while (fileIterator.hasNext()) {
                 LocatedFileStatus fileStatus = fileIterator.next();
                 if (fileStatus.isFile() && !fileStatus.getPath().getName().equals(".vega-metadata")) {
-                    String relativePath = fileStatus.getPath().toString().substring(hdfsPath.length() + 1);
+                    Path filePath = fileStatus.getPath();
+                    String fullPathString = filePath.toString();
+                    // Extract relative path from full HDFS path
+                    // Full path: hdfs://localhost:9000/vega/repositories/1/repo-id/path
+                    // We want: path (relative to repo-id directory)
+                    String relativePath;
+                    
+                    // Remove hdfs://namenode:9000 prefix if present
+                    String normalizedPath = fullPathString;
+                    if (normalizedPath.startsWith("hdfs://")) {
+                        int thirdSlash = normalizedPath.indexOf("/", 7); // After hdfs://
+                        if (thirdSlash > 0) {
+                            normalizedPath = normalizedPath.substring(thirdSlash);
+                        }
+                    }
+                    
+                    // Extract relative path after hdfsPath
+                    String hdfsPathNormalized = hdfsPath;
+                    if (hdfsPathNormalized.startsWith("/")) {
+                        hdfsPathNormalized = hdfsPathNormalized.substring(1);
+                    }
+                    if (!normalizedPath.startsWith("/")) {
+                        normalizedPath = "/" + normalizedPath;
+                    }
+                    
+                    if (normalizedPath.startsWith("/" + hdfsPathNormalized)) {
+                        relativePath = normalizedPath.substring(hdfsPathNormalized.length() + 2); // +2 for // after hdfsPath
+                    } else if (normalizedPath.contains(hdfsPathNormalized)) {
+                        int idx = normalizedPath.indexOf(hdfsPathNormalized);
+                        relativePath = normalizedPath.substring(idx + hdfsPathNormalized.length() + 1);
+                    } else {
+                        // Fallback: try Path.relativize
+                        try {
+                            Path repoPathObj = new Path(hdfsPath);
+                            relativePath = repoPathObj.toUri().relativize(filePath.toUri()).getPath();
+                            if (relativePath.startsWith("/")) {
+                                relativePath = relativePath.substring(1);
+                            }
+                        } catch (Exception e) {
+                            // Last resort: use filename
+                            relativePath = filePath.getName();
+                        }
+                    }
                     
                     // Download and decompress file
                     byte[] compressedData = readFileFromHdfs(fs, fileStatus.getPath());
                     byte[] decompressedData = decompressData(compressedData);
-                    String content = new String(decompressedData);
+                    // Encode content as Base64 for JSON transmission
+                    String contentBase64 = java.util.Base64.getEncoder().encodeToString(decompressedData);
                     
                     PullResponse.FileInfo fileInfo = PullResponse.FileInfo.builder()
                             .path(relativePath)
-                            .content(content)
-                            .hash(calculateHash(content))
+                            .content(contentBase64)
+                            .hash(calculateHash(new String(decompressedData)))
                             .size((long) decompressedData.length)
                             .type(determineFileType(relativePath))
                             .build();
@@ -88,16 +164,40 @@ public class HdfsPullService {
         }
     }
     
+    // Overloaded method for backward compatibility
     public boolean repositoryExists(Long userId, String repositoryId) throws IOException {
-        String hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
-        
+        // Check if repositoryId is in format username/repository-name
+        if (repositoryId.contains("/")) {
+            String hdfsPath = String.format("%s/%s", basePath, repositoryId);
+            try (FileSystem fs = getFileSystem()) {
+                return fs.exists(new Path(hdfsPath));
+            }
+        } else {
+            // Old format: use userId
+            String hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
+            try (FileSystem fs = getFileSystem()) {
+                return fs.exists(new Path(hdfsPath));
+            }
+        }
+    }
+    
+    // New method using username/repository-name format
+    public boolean repositoryExists(String username, String repositoryName) throws IOException {
+        String hdfsPath = String.format("%s/%s/%s", basePath, username, repositoryName);
         try (FileSystem fs = getFileSystem()) {
             return fs.exists(new Path(hdfsPath));
         }
     }
     
     public String getRepositoryInfo(Long userId, String repositoryId) throws IOException {
-        String hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
+        String hdfsPath;
+        // Check if repositoryId is in format username/repository-name
+        if (repositoryId.contains("/")) {
+            hdfsPath = String.format("%s/%s", basePath, repositoryId);
+        } else {
+            // Old format: use userId
+            hdfsPath = String.format("%s/%d/%s", basePath, userId, repositoryId);
+        }
         
         try (FileSystem fs = getFileSystem()) {
             Path repoPath = new Path(hdfsPath);

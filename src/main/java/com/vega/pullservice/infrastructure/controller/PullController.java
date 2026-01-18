@@ -19,13 +19,31 @@ public class PullController {
     
     @PostMapping("/repository")
     public ResponseEntity<PullResponse> pullRepository(
-            @RequestHeader("Authorization") String token,
+            @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody PullRequest request) {
         try {
+            // Remove "Bearer " prefix if present
+            String token = authHeader;
+            if (token != null && token.startsWith("Bearer ")) {
+                token = token.substring(7);
+            }
+            
             PullResponse response = pullService.pullRepository(token, request);
             return ResponseEntity.ok(response);
         } catch (RuntimeException e) {
-            return ResponseEntity.badRequest().build();
+            e.printStackTrace();
+            return ResponseEntity.badRequest()
+                    .body(PullResponse.builder()
+                            .status("FAILED")
+                            .message("Pull failed: " + e.getMessage())
+                            .build());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.badRequest()
+                    .body(PullResponse.builder()
+                            .status("FAILED")
+                            .message("Pull failed: " + e.getMessage())
+                            .build());
         }
     }
     
