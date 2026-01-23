@@ -17,6 +17,16 @@ public class PullController {
     
     private final PullService pullService;
     
+    /**
+     * Pull repository endpoint'i. POST /api/pull/repository
+     * Authorization header'ından token'ı alır, PullService.pullRepository() metodunu çağırır.
+     * Giriş: Authorization header (Bearer token), PullRequest (repositoryId, commitHash (opsiyonel), forcePull)
+     * Çıktı: 200 OK ile PullResponse (dosyalar Base64 encode edilmiş) veya 400 Bad Request (hata durumunda)
+     * 
+     * @param authHeader Authorization header (Bearer prefix'i otomatik kaldırılır)
+     * @param request PullRequest (repositoryId, commitHash (opsiyonel), forcePull)
+     * @return ResponseEntity<PullResponse> (200 OK veya 400 Bad Request)
+     */
     @PostMapping("/repository")
     public ResponseEntity<PullResponse> pullRepository(
             @RequestHeader("Authorization") String authHeader,

@@ -22,6 +22,14 @@ public class UserValidationService {
     @Value("${user-service.url}")
     private String userServiceUrl;
     
+    /**
+     * Token'ı User Service'e göndererek validate eder. POST /api/auth/validate endpoint'ine istek gönderir.
+     * Giriş: token (JWT token string)
+     * Çıktı: Token geçerliyse true, değilse false
+     * 
+     * @param token JWT token string
+     * @return Token geçerliyse true, değilse false
+     */
     public boolean validateToken(String token) {
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -40,6 +48,14 @@ public class UserValidationService {
         }
     }
     
+    /**
+     * Token'dan user ID'yi çıkarır. User Service'in /api/auth/user-id endpoint'ine POST isteği gönderir.
+     * Giriş: token (JWT token string)
+     * Çıktı: User ID (Long) veya null (token geçersizse veya kullanıcı bulunamazsa)
+     * 
+     * @param token JWT token string
+     * @return User ID veya null
+     */
     public Long getUserIdFromToken(String token) {
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -60,6 +76,15 @@ public class UserValidationService {
         return null;
     }
     
+    /**
+     * Token'dan username'i çıkarır. User Service'in /api/auth/username endpoint'ine POST isteği gönderir.
+     * Repository ID parse etmek için kullanılır (username/repository-name formatı).
+     * Giriş: token (JWT token string)
+     * Çıktı: Username string veya null (token geçersizse)
+     * 
+     * @param token JWT token string
+     * @return Username veya null
+     */
     public String getUsernameFromToken(String token) {
         try {
             HttpHeaders headers = new HttpHeaders();

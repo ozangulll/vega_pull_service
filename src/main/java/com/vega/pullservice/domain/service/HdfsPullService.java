@@ -59,7 +59,19 @@ public class HdfsPullService {
         return downloadRepositoryInternal(hdfsPath, repositoryId);
     }
     
-    // New method using username/repository-name format
+    /**
+     * Repository'yi HDFS'ten indirir. Repository ID formatı: username/repository-name
+     * HDFS path: /vega/repositories/username/repository-name
+     * Tüm dosyaları HDFS'ten okur, GZIP ile decompress eder, Base64 encode eder ve PullResponse'a ekler.
+     * Metadata dosyasını okur ve repository name'i çıkarır.
+     * Giriş: username, repositoryName
+     * Çıktı: PullResponse (repositoryId, repositoryName, hdfsPath, fileCount, totalSize, files array - her dosya path, content (Base64), hash, size, type içerir)
+     * 
+     * @param username Kullanıcı adı
+     * @param repositoryName Repository ismi
+     * @return PullResponse (dosyalar Base64 encode edilmiş)
+     * @throws IOException Repository bulunamazsa, HDFS bağlantı hatası veya dosya okuma hatası olursa fırlatılır
+     */
     public PullResponse downloadRepository(String username, String repositoryName) throws IOException {
         String hdfsPath = String.format("%s/%s/%s", basePath, username, repositoryName);
         String repositoryId = username + "/" + repositoryName;
@@ -181,7 +193,17 @@ public class HdfsPullService {
         }
     }
     
-    // New method using username/repository-name format
+    /**
+     * Repository'nin HDFS'te var olup olmadığını kontrol eder. Repository ID formatı: username/repository-name
+     * HDFS path: /vega/repositories/username/repository-name
+     * Giriş: username, repositoryName
+     * Çıktı: Repository varsa true, yoksa false
+     * 
+     * @param username Kullanıcı adı
+     * @param repositoryName Repository ismi
+     * @return Repository varsa true, yoksa false
+     * @throws IOException HDFS bağlantı hatası olursa fırlatılır
+     */
     public boolean repositoryExists(String username, String repositoryName) throws IOException {
         String hdfsPath = String.format("%s/%s/%s", basePath, username, repositoryName);
         try (FileSystem fs = getFileSystem()) {

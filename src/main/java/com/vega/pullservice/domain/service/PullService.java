@@ -25,6 +25,19 @@ public class PullService {
     private final PullOperationRepository pullOperationRepository;
     private final RepositorySyncRepository repositorySyncRepository;
     
+    /**
+     * Repository'yi HDFS'ten pull eder. Token'ı validate eder, repository ID'den username ve repository name'i çıkarır,
+     * HDFS'te repository'nin var olup olmadığını kontrol eder, PullOperation kaydı oluşturur,
+     * HdfsPullService ile repository'yi HDFS'ten indirir, RepositorySync kaydı günceller.
+     * Repository ID formatı: "repository-name" veya "username/repository-name" olabilir.
+     * Giriş: token (JWT token), request (repositoryId, commitHash (opsiyonel), forcePull)
+     * Çıktı: PullResponse (pullId, repositoryId, repositoryName, hdfsPath, status, fileCount, totalSize, createdAt, message, files array)
+     * 
+     * @param token JWT token (Authorization header'dan gelir)
+     * @param request PullRequest (repositoryId, commitHash (opsiyonel), forcePull)
+     * @return PullResponse (pull işlemi sonucu ve dosyalar)
+     * @throws RuntimeException Token geçersizse, repository bulunamazsa veya HDFS download hatası olursa fırlatılır
+     */
     @Transactional
     public PullResponse pullRepository(String token, PullRequest request) {
         // Validate user token
