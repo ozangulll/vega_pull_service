@@ -40,3 +40,6 @@ surefire-reports/
 
 # Temporary files
 tmp/
+
+# Markdown (do not track / push)
+*.md
