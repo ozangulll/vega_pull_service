@@ -1,4 +1,4 @@
-# Maven
+# Maven — build output (all modules)
 target/
 !.mvn/wrapper/maven-wrapper.jar
 
