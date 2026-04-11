@@ -370,18 +370,22 @@ public class HdfsPullService {
         }
     }
     
-    private byte[] decompressData(byte[] compressedData) throws IOException {
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(compressedData);
-             GZIPInputStream gzipIn = new GZIPInputStream(bais);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            while ((bytesRead = gzipIn.read(buffer)) != -1) {
-                baos.write(buffer, 0, bytesRead);
+    private byte[] decompressData(byte[] data) throws IOException {
+        // Check GZIP magic bytes (0x1f 0x8b) before attempting decompression
+        if (data.length >= 2 && (data[0] & 0xFF) == 0x1f && (data[1] & 0xFF) == 0x8b) {
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(data);
+                 GZIPInputStream gzipIn = new GZIPInputStream(bais);
+                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = gzipIn.read(buffer)) != -1) {
+                    baos.write(buffer, 0, bytesRead);
+                }
+                return baos.toByteArray();
             }
-            return baos.toByteArray();
         }
+        // Not GZIP-compressed, return as-is
+        return data;
     }
     
     private String readMetadataFile(FileSystem fs, String hdfsPath) throws IOException {
