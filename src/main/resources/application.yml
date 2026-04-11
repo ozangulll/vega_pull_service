@@ -38,6 +38,13 @@ push-service:
   url: http://localhost:8082
   timeout: 5000
 
+# Vega Repos — public/private + collaborator rules for pull (RepoAccessService.canAccess)
+vega:
+  repos-service:
+    url: ${VEGA_REPOS_SERVICE_URL:http://localhost:8086}
+    # Set false only if Repos is not running (local HDFS-only dev); production must stay true
+    require-access-check: ${VEGA_REPOS_PULL_ACCESS_CHECK:true}
+
 # Logging
 logging:
   level:

@@ -2,6 +2,7 @@ package com.vega.pullservice.infrastructure.controller;
 
 import com.vega.pullservice.domain.dto.PullRequest;
 import com.vega.pullservice.domain.dto.PullResponse;
+import com.vega.pullservice.domain.dto.RemoteRefsResponse;
 import com.vega.pullservice.domain.service.PullService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +55,26 @@ public class PullController {
                             .status("FAILED")
                             .message("Pull failed: " + e.getMessage())
                             .build());
+        }
+    }
+
+    /**
+     * Lightweight remote refs (HDFS HEAD + refs/heads/*) for CLI status — no object download.
+     */
+    @GetMapping("/repository/refs")
+    public ResponseEntity<RemoteRefsResponse> getRepositoryRefs(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam("repositoryId") String repositoryId) {
+        try {
+            String token = authHeader;
+            if (token != null && token.startsWith("Bearer ")) {
+                token = token.substring(7);
+            }
+            RemoteRefsResponse refs = pullService.getRemoteRefs(token, repositoryId);
+            return ResponseEntity.ok(refs);
+        } catch (RuntimeException e) {
+            e.printStackTrace();
+            return ResponseEntity.badRequest().build();
         }
     }
     

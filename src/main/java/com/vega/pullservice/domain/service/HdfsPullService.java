@@ -12,9 +12,15 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 @Service
@@ -210,6 +216,103 @@ public class HdfsPullService {
             return fs.exists(new Path(hdfsPath));
         }
     }
+
+    /**
+     * Reads refs from HDFS without downloading objects. Paths match push layout: {@code HEAD}, {@code refs/heads/*}.
+     */
+    public static class RemoteRefsSnapshot {
+        public final Map<String, String> heads;
+        public final String symbolicHead;
+        public final String headCommit;
+
+        public RemoteRefsSnapshot(Map<String, String> heads, String symbolicHead, String headCommit) {
+            this.heads = heads;
+            this.symbolicHead = symbolicHead;
+            this.headCommit = headCommit;
+        }
+    }
+
+    public RemoteRefsSnapshot readRemoteRefsSnapshot(String username, String repositoryName) throws IOException {
+        String hdfsPath = String.format("%s/%s/%s", basePath, username, repositoryName);
+        try (FileSystem fs = getFileSystem()) {
+            Path root = new Path(hdfsPath);
+            if (!fs.exists(root)) {
+                throw new IOException("Repository not found: " + username + "/" + repositoryName);
+            }
+            Map<String, String> heads = new LinkedHashMap<>();
+            Path headsDir = new Path(hdfsPath + "/refs/heads");
+            if (fs.exists(headsDir)) {
+                FileStatus[] listed = fs.listStatus(headsDir);
+                for (FileStatus st : listed) {
+                    if (st.isFile()) {
+                        String branch = st.getPath().getName();
+                        readRepoTextFile(fs, hdfsPath, "refs/heads/" + branch).ifPresent(h -> heads.put(branch, h));
+                    }
+                }
+            }
+            String symbolicHead = null;
+            String headCommit = null;
+            Optional<String> headFile = readRepoTextFile(fs, hdfsPath, "HEAD");
+            if (headFile.isPresent()) {
+                String hc = headFile.get().trim();
+                if (hc.startsWith("ref: ")) {
+                    symbolicHead = hc.substring(5).trim();
+                    headCommit = readRepoTextFile(fs, hdfsPath, symbolicHead).orElse(null);
+                } else {
+                    headCommit = hc;
+                }
+            }
+            return new RemoteRefsSnapshot(heads, symbolicHead, headCommit);
+        }
+    }
+
+    private Optional<String> readRepoTextFile(FileSystem fs, String hdfsRepoPath, String relativePath) throws IOException {
+        Path p = new Path(hdfsRepoPath + "/" + relativePath.replace("\\", "/"));
+        if (!fs.exists(p)) {
+            return Optional.empty();
+        }
+        FileStatus st = fs.getFileStatus(p);
+        if (!st.isFile()) {
+            return Optional.empty();
+        }
+        byte[] compressed = readFileFromHdfs(fs, p);
+        byte[] data = decompressData(compressed);
+        return Optional.of(new String(data, StandardCharsets.UTF_8).trim());
+    }
+
+    /**
+     * Lists repositories under {@code basePath/username/*} (current layout) and legacy {@code basePath/userId/*}.
+     * Returns canonical ids {@code username/repo} for username layout, plain repo name for legacy dirs.
+     */
+    public List<String> listRepositoriesForUser(Long userId, String username) throws IOException {
+        Set<String> ordered = new LinkedHashSet<>();
+        if (username != null && !username.isBlank()) {
+            String userPath = String.format("%s/%s", basePath, username);
+            try (FileSystem fs = getFileSystem()) {
+                Path userDir = new Path(userPath);
+                if (fs.exists(userDir)) {
+                    for (FileStatus st : fs.listStatus(userDir)) {
+                        if (st.isDirectory()) {
+                            String repo = st.getPath().getName();
+                            ordered.add(username + "/" + repo);
+                        }
+                    }
+                }
+            }
+        }
+        String legacyPath = String.format("%s/%d", basePath, userId);
+        try (FileSystem fs = getFileSystem()) {
+            Path userDir = new Path(legacyPath);
+            if (fs.exists(userDir)) {
+                for (FileStatus st : fs.listStatus(userDir)) {
+                    if (st.isDirectory()) {
+                        ordered.add(st.getPath().getName());
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(ordered);
+    }
     
     public String getRepositoryInfo(Long userId, String repositoryId) throws IOException {
         String hdfsPath;
@@ -295,7 +398,7 @@ public class HdfsPullService {
             while ((bytesRead = inputStream.read(buffer)) != -1) {
                 baos.write(buffer, 0, bytesRead);
             }
-            return baos.toString();
+            return baos.toString(StandardCharsets.UTF_8);
         }
     }
     

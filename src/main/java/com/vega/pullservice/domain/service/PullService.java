@@ -2,6 +2,7 @@ package com.vega.pullservice.domain.service;
 
 import com.vega.pullservice.domain.dto.PullRequest;
 import com.vega.pullservice.domain.dto.PullResponse;
+import com.vega.pullservice.domain.dto.RemoteRefsResponse;
 import com.vega.pullservice.domain.model.PullOperation;
 import com.vega.pullservice.domain.model.RepositorySync;
 import com.vega.pullservice.domain.repository.PullOperationRepository;
@@ -11,9 +12,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +26,7 @@ public class PullService {
     private final UserValidationService userValidationService;
     private final PullOperationRepository pullOperationRepository;
     private final RepositorySyncRepository repositorySyncRepository;
+    private final RepoPullAccessClient repoPullAccessClient;
     
     /**
      * Repository'yi HDFS'ten pull eder. Token'ı validate eder, repository ID'den username ve repository name'i çıkarır,
@@ -49,34 +52,14 @@ public class PullService {
         if (userId == null) {
             throw new RuntimeException("Unable to determine user ID");
         }
-        
-        // Repository ID is now in format: username/repository-name
-        // Extract username and repository name from repositoryId
-        String username = null;
-        String repositoryName = request.getRepositoryId();
-        if (request.getRepositoryId().contains("/")) {
-            String[] parts = request.getRepositoryId().split("/", 2);
-            if (parts.length == 2) {
-                username = parts[0];
-                repositoryName = parts[1];
-            }
-        }
-        
-        // If username not in repositoryId, get from token
-        if (username == null || username.isEmpty()) {
-            username = userValidationService.getUsernameFromToken(token);
-            if (username == null || username.isEmpty()) {
-                // If repositoryId doesn't contain "/", assume it's just repository name and use current user
-                username = userValidationService.getUsernameFromToken(token);
-                if (username == null || username.isEmpty()) {
-                    throw new RuntimeException("Unable to determine username");
-                }
-            }
-        }
-        
-        // Repository ID in format: username/repository-name
-        String repositoryId = username + "/" + repositoryName;
-        
+
+        PullTarget target = resolvePullTarget(request.getRepositoryId(), token);
+        String username = target.owner();
+        String repositoryName = target.repo();
+        String repositoryId = target.canonical();
+
+        repoPullAccessClient.assertCanPull(token, username, repositoryName);
+
         // Check if repository exists in HDFS
         try {
             if (!hdfsPullService.repositoryExists(username, repositoryName)) {
@@ -115,8 +98,18 @@ public class PullService {
             pullOperation.setCompletedAt(LocalDateTime.now());
             pullOperationRepository.save(pullOperation);
             
-            // Update or create repository sync record
-            updateRepositorySync(userId, request.getRepositoryId(), request.getCommitHash());
+            String syncCommit = request.getCommitHash();
+            if (syncCommit == null || syncCommit.isEmpty()) {
+                try {
+                    HdfsPullService.RemoteRefsSnapshot snap = hdfsPullService.readRemoteRefsSnapshot(username, repositoryName);
+                    if (snap.headCommit != null && !snap.headCommit.isEmpty()) {
+                        syncCommit = snap.headCommit;
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not read remote HEAD for sync metadata: {}", e.getMessage());
+                }
+            }
+            updateRepositorySync(userId, repositoryId, syncCommit);
             
             log.info("Successfully pulled repository: {} for user: {}", request.getRepositoryId(), userId);
             
@@ -190,10 +183,46 @@ public class PullService {
         }
         
         try {
-            return hdfsPullService.listUserRepositories(userId);
+            String username = userValidationService.getUsernameFromToken(token);
+            return hdfsPullService.listRepositoriesForUser(userId, username);
         } catch (Exception e) {
             log.error("Failed to list repositories for user: {}", userId, e);
             throw new RuntimeException("Failed to list repositories: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Reads branch tips and HEAD from HDFS only (no blob download). For CLI remote status.
+     */
+    public RemoteRefsResponse getRemoteRefs(String token, String repositoryIdParam) {
+        if (!userValidationService.validateToken(token)) {
+            throw new RuntimeException("Invalid or expired token");
+        }
+        Long userId = userValidationService.getUserIdFromToken(token);
+        if (userId == null) {
+            throw new RuntimeException("Unable to determine user ID");
+        }
+
+        PullTarget target = resolvePullTarget(repositoryIdParam, token);
+        String username = target.owner();
+        String repositoryName = target.repo();
+        String canonical = target.canonical();
+
+        repoPullAccessClient.assertCanPull(token, username, repositoryName);
+
+        try {
+            if (!hdfsPullService.repositoryExists(username, repositoryName)) {
+                throw new RuntimeException("Repository not found: " + canonical);
+            }
+            HdfsPullService.RemoteRefsSnapshot snap = hdfsPullService.readRemoteRefsSnapshot(username, repositoryName);
+            return RemoteRefsResponse.builder()
+                    .repositoryId(canonical)
+                    .heads(new LinkedHashMap<>(snap.heads))
+                    .symbolicHead(snap.symbolicHead)
+                    .headCommit(snap.headCommit)
+                    .build();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read remote refs: " + e.getMessage());
         }
     }
     
@@ -207,7 +236,12 @@ public class PullService {
         if (userId == null) {
             throw new RuntimeException("Unable to determine user ID");
         }
-        
+
+        if (repositoryId != null && repositoryId.contains("/")) {
+            PullTarget target = resolvePullTarget(repositoryId, token);
+            repoPullAccessClient.assertCanPull(token, target.owner(), target.repo());
+        }
+
         try {
             return hdfsPullService.getRepositoryInfo(userId, repositoryId);
         } catch (Exception e) {
@@ -248,6 +282,27 @@ public class PullService {
         }
     }
     
+    private PullTarget resolvePullTarget(String repositoryIdParam, String token) {
+        String owner = null;
+        String repoName = repositoryIdParam;
+        if (repositoryIdParam != null && repositoryIdParam.contains("/")) {
+            String[] parts = repositoryIdParam.split("/", 2);
+            if (parts.length == 2) {
+                owner = parts[0];
+                repoName = parts[1];
+            }
+        }
+        if (owner == null || owner.isEmpty()) {
+            owner = userValidationService.getUsernameFromToken(token);
+            if (owner == null || owner.isEmpty()) {
+                throw new RuntimeException("Unable to determine username");
+            }
+        }
+        return new PullTarget(owner, repoName, owner + "/" + repoName);
+    }
+
+    private record PullTarget(String owner, String repo, String canonical) {}
+
     private PullResponse mapToPullResponse(PullOperation operation) {
         return PullResponse.builder()
                 .pullId(operation.getId())
