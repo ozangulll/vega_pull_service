@@ -242,11 +242,21 @@ public class HdfsPullService {
             Map<String, String> heads = new LinkedHashMap<>();
             Path headsDir = new Path(hdfsPath + "/refs/heads");
             if (fs.exists(headsDir)) {
-                FileStatus[] listed = fs.listStatus(headsDir);
-                for (FileStatus st : listed) {
-                    if (st.isFile()) {
-                        String branch = st.getPath().getName();
-                        readRepoTextFile(fs, hdfsPath, "refs/heads/" + branch).ifPresent(h -> heads.put(branch, h));
+                RemoteIterator<LocatedFileStatus> listed = fs.listFiles(headsDir, true);
+                String headsPrefix = headsDir.toUri().getPath();
+                if (headsPrefix == null) headsPrefix = headsDir.toString();
+                while (listed.hasNext()) {
+                    LocatedFileStatus st = listed.next();
+                    if (!st.isFile()) continue;
+                    String filePath = st.getPath().toUri().getPath();
+                    if (filePath == null) filePath = st.getPath().toString();
+                    if (!filePath.startsWith(headsPrefix)) continue;
+                    String branch = filePath.substring(headsPrefix.length());
+                    if (branch.startsWith("/")) branch = branch.substring(1);
+                    if (branch.isEmpty()) continue;
+                    Optional<String> branchHead = readRepoTextFile(fs, hdfsPath, "refs/heads/" + branch);
+                    if (branchHead.isPresent()) {
+                        heads.put(branch, branchHead.get());
                     }
                 }
             }
