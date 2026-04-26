@@ -23,19 +23,19 @@ spring:
 # Hadoop HDFS Configuration
 hadoop:
   hdfs:
-    uri: hdfs://localhost:9000
+    uri: ${HDFS_URI:hdfs://localhost:9000}
     base-path: /vega/repositories
-    replication: 3
-    block-size: 134217728 # 128MB
+    replication: ${HDFS_REPLICATION:1}
+    block-size: 134217728
 
 # User Service Integration
 user-service:
-  url: http://localhost:8085
+  url: ${USER_SERVICE_URL:http://localhost:8085}
   timeout: 5000
 
 # Push Service Integration
 push-service:
-  url: http://localhost:8082
+  url: ${PUSH_SERVICE_URL:http://localhost:8082}
   timeout: 5000
 
 # Vega Repos — public/private + collaborator rules for pull (RepoAccessService.canAccess)
